@@ -1,26 +1,89 @@
 from flask import Flask, request, jsonify, render_template
 import socket
 from urllib.parse import urlparse
+import time
+import threading
+import requests
+import os
 
 app = Flask(__name__)
 
+# إعدادات تليجرام (سنسحبها من إعدادات Railway لاحقاً)
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+
+# متغير لحفظ الحالة السابقة لضمان عدم إرسال رسائل متكررة
+last_status = None
+
+def check_socket(host, port, timeout=10.0):
+    """دالة الفحص الأساسية"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((host, port))
+        s.close()
+        return "شغال"
+    except Exception:
+        return "واقف"
+
+def send_telegram_message(message):
+    """دالة إرسال الرسالة لتليجرام"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return # إذا لم يتم إدخال التوكن، لا تفعل شيئاً
+        
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML"
+    }
+    try:
+        requests.post(url, json=payload)
+    except Exception as e:
+        print("خطأ في الإرسال لتليجرام:", e)
+
+def monitor_host():
+    """المراقب الذي يعمل في الخلفية كل 15 ثانية"""
+    global last_status
+    target_host = 'mobile4.bok-sd.com'
+    target_port = 3443
+
+    while True:
+        current_status = check_socket(target_host, target_port)
+        
+        # إذا تغيرت الحالة عن الفحص السابق، أرسل رسالة
+        if current_status != last_status:
+            if current_status == "شغال":
+                msg = "✅ <b>تطبيق بنكك الآن شغال</b>\nالخادم يستجيب للاتصال بشكل طبيعي."
+            else:
+                msg = "❌ <b>تطبيق بنكك الآن واقف</b>\nالخادم لا يستجيب."
+            
+            # نرسل الرسالة فقط إذا لم تكن هذه هي المرة الأولى للتشغيل (اختياري، لكنه يرسل عند التشغيل أول مرة لمعرفة الحالة الحالية)
+            send_telegram_message(msg)
+            
+            # تحديث الحالة
+            last_status = current_status
+        
+        # انتظار 15 ثانية قبل الفحص التالي
+        time.sleep(15)
+
+# تشغيل المراقب في الخلفية فور تشغيل السيرفر
+monitor_thread = threading.Thread(target=monitor_host, daemon=True)
+monitor_thread.start()
+
 @app.route('/')
 def index():
-    # عرض واجهة المستخدم
     return render_template('index.html')
 
 @app.route('/check', methods=['POST'])
 def check():
     url_input = request.form.get('url', '').strip()
-    
     if not url_input:
         return jsonify({'status': 'error', 'message': 'الرابط فارغ', 'details': ''})
 
-    # استخراج الهوست والبورت من المدخلات
     host = url_input
-    port = 3443 # المنفذ الافتراضي
+    port = 3443
 
-    # تنظيف الرابط
     if '://' in host:
         parsed = urlparse(host)
         host = parsed.hostname
@@ -34,31 +97,14 @@ def check():
             port = 3443
 
     host = host.replace('https://', '').replace('http://', '').split('/')[0]
-
-    try:
-        # محاولة الاتصال المباشر بالمنفذ
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(10.0) # مهلة 10 ثواني
-        s.connect((host, port))
-        s.close()
-        
-        return jsonify({
-            'status': 'success',
-            'message': 'شغال',
-            'details': f'Socket Connection Established (Port {port} is OPEN)'
-        })
-    except socket.timeout:
-        return jsonify({
-            'status': 'error',
-            'message': 'التطبيق واقف',
-            'details': 'Socket Error: Connection timed out'
-        })
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': 'التطبيق واقف',
-            'details': f'Socket Error: {str(e)}'
-        })
+    
+    # استخدام نفس دالة الفحص
+    status = check_socket(host, port)
+    
+    if status == "شغال":
+        return jsonify({'status': 'success', 'message': 'شغال', 'details': f'Socket Connection Established (Port {port} is OPEN)'})
+    else:
+        return jsonify({'status': 'error', 'message': 'التطبيق واقف', 'details': 'Socket Error: Connection Failed'})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

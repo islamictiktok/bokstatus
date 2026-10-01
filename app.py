@@ -8,7 +8,7 @@ import os
 
 app = Flask(__name__)
 
-# إعدادات تليجرام (سنسحبها من إعدادات Railway لاحقاً)
+# سحب إعدادات تليجرام من المتغيرات في Railway
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 
@@ -27,9 +27,10 @@ def check_socket(host, port, timeout=10.0):
         return "واقف"
 
 def send_telegram_message(message):
-    """دالة إرسال الرسالة لتليجرام"""
+    """دالة إرسال الرسالة لتليجرام مع طباعة السجلات لاكتشاف الأخطاء"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return # إذا لم يتم إدخال التوكن، لا تفعل شيئاً
+        print("تحذير: التوكن أو الآيدي غير موجود في المتغيرات (Variables)!")
+        return 
         
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -38,9 +39,11 @@ def send_telegram_message(message):
         "parse_mode": "HTML"
     }
     try:
-        requests.post(url, json=payload)
+        response = requests.post(url, json=payload)
+        # هذا السطر سيطبع رد تليجرام في سجلات Railway لمعرفة سبب الرفض
+        print(f"محاولة إرسال لتليجرام | كود الحالة: {response.status_code} | الرد: {response.text}")
     except Exception as e:
-        print("خطأ في الإرسال لتليجرام:", e)
+        print("فشل الاتصال بسيرفر تليجرام:", e)
 
 def monitor_host():
     """المراقب الذي يعمل في الخلفية كل 15 ثانية"""
@@ -58,10 +61,7 @@ def monitor_host():
             else:
                 msg = "❌ <b>تطبيق بنكك الآن واقف</b>\nالخادم لا يستجيب."
             
-            # نرسل الرسالة فقط إذا لم تكن هذه هي المرة الأولى للتشغيل (اختياري، لكنه يرسل عند التشغيل أول مرة لمعرفة الحالة الحالية)
             send_telegram_message(msg)
-            
-            # تحديث الحالة
             last_status = current_status
         
         # انتظار 15 ثانية قبل الفحص التالي
@@ -73,6 +73,7 @@ monitor_thread.start()
 
 @app.route('/')
 def index():
+    # عرض الواجهة
     return render_template('index.html')
 
 @app.route('/check', methods=['POST'])
@@ -98,7 +99,7 @@ def check():
 
     host = host.replace('https://', '').replace('http://', '').split('/')[0]
     
-    # استخدام نفس دالة الفحص
+    # استخدام نفس دالة الفحص للواجهة
     status = check_socket(host, port)
     
     if status == "شغال":
